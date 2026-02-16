@@ -18,25 +18,79 @@ using namespace frontend::standard;
 
 bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &enqueue_job, int &total_idle, int *n_idle_units) {
   auto *sj = (SysArrayJob *) j;
+  auto is_last_tile = [&](int row, int col) {
+    return row == loop_row_tiles && col == loop_cols_tiles;
+  };
+  auto advance_tile = [&](int &row, int &col) -> bool {
+    if (is_last_tile(row, col)) {
+      return false;
+    }
+    if (col == loop_cols_tiles) {
+      col = 1;
+      row++;
+    } else {
+      col++;
+    }
+    return true;
+  };
+  auto preload_bytes_for_tile = [&](int row, int col) {
+    int weight_preload = std::min(sz, sj->K) * std::min(sz, sj->N) * data_type_width;
+    int activation_preload = 0;
+    if (col == 1 && row > 1) {
+      activation_preload = std::min(sz, sj->K) * sj->M * batch_size * data_type_width;
+    }
+    return weight_preload + activation_preload;
+  };
+
   enqueue_reads();
   enqueue_writes();
   if (process_stage()) {
     if (ws) {  // Weight Stationary mode
       switch (state) {
         case prefetch:  // Load weights into systolic array
+          {
+            int next_read_preload = 0;
+            if (ws_double_buffer) {
+              int nxt_r = row_i;
+              int nxt_c = col_i;
+              if (advance_tile(nxt_r, nxt_c)) {
+                // During read(row_i,col_i), preload the next tile.
+                next_read_preload = preload_bytes_for_tile(nxt_r, nxt_c);
+              }
+            }
           state_transfer(read,
-                         0,
+                         next_read_preload,
                          0,
                          sj->M * std::max(systolic_fpu_latency, batch_size));
+          }
           break;
         case read:  // Read input activations
-          state_transfer(shift,
-                         std::min(sz, sj->K) * std::min(sz, sj->N) * data_type_width,
-                         0,
-                         sz * std::max(systolic_fpu_latency, batch_size));
+          if (ws_double_buffer) {
+            if (is_last_tile(row_i, col_i)) {
+              // Keep explicit tail flush for the final tile.
+              state_transfer(shift, 0, 0, sz * std::max(systolic_fpu_latency, batch_size));
+            } else {
+              // Idealized overlap: steady-state tiles skip explicit shift.
+              state_transfer(write, 0, 0, 0);
+            }
+          } else {
+            state_transfer(shift,
+                           std::min(sz, sj->K) * std::min(sz, sj->N) * data_type_width,
+                           0,
+                           sz * std::max(systolic_fpu_latency, batch_size));
+          }
           break;
           
         case shift: {  // Compute phase: shift data through systolic array
+          if (ws_double_buffer) {
+            // In double-buffer mode, shift is only used for final-tile tail flush.
+            int amt_to_write = is_last_tile(row_i, col_i)
+                                   ? sj->M * sj->N * data_type_width * batch_size
+                                   : 0;
+            state_transfer(write, 0, amt_to_write, 0);
+            break;
+          }
+
           int amt_to_write = 0;
           int amt_to_read = 0;
           int n_cycles = 0;
@@ -56,22 +110,30 @@ bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &e
         } break;
         case write: {  // Write output data to memory
           int rd_cycles = sj->M * std::max(systolic_fpu_latency, batch_size);
-          if (col_i == loop_cols_tiles) {
-            if (row_i == loop_row_tiles) {
-              // Job completed
-              state_transfer(idle, 0, 0, 0);
-              TO_IDLE_CLEANUP();
-            } else {
-              // Move to next row tile
-              j->addr = j->addr_hold;
-              state_transfer(read, 0, 0, rd_cycles);
-              col_i = 1;
-              row_i++;
-            }
+          if (is_last_tile(row_i, col_i)) {
+            // Job completed
+            state_transfer(idle, 0, 0, 0);
+            TO_IDLE_CLEANUP();
           } else {
-            // Move to next column tile
-            state_transfer(read, 0, 0, rd_cycles);
-            col_i++;
+            int next_row = row_i;
+            int next_col = col_i;
+            advance_tile(next_row, next_col);
+            if (next_col == 1) {
+              j->addr = j->addr_hold;
+            }
+
+            int overlap_preload = 0;
+            if (ws_double_buffer) {
+              int nxt2_row = next_row;
+              int nxt2_col = next_col;
+              if (advance_tile(nxt2_row, nxt2_col)) {
+                // During read(next_row,next_col), preload one tile ahead.
+                overlap_preload = preload_bytes_for_tile(nxt2_row, nxt2_col);
+              }
+            }
+            state_transfer(read, overlap_preload, 0, rd_cycles);
+            row_i = next_row;
+            col_i = next_col;
           }
         } break;
         case idle:
@@ -174,7 +236,8 @@ void SystolicArray::SysArrayState::init() {
     throw std::runtime_error("loop_cols_tiles == 0");
 }
 
-SystolicArray::SysArrayState::SysArrayState(int sz, bool ws) : State(1), sz(sz), ws(ws), state(SystolicArray::idle) {
+SystolicArray::SysArrayState::SysArrayState(int sz, bool ws, bool ws_double_buffer)
+    : State(1), sz(sz), ws(ws), ws_double_buffer(ws_double_buffer), state(SystolicArray::idle) {
   beats_per_wb = std::max((sz * sz * data_type_width * batch_size) / bytes_per_tx, 1);
 }
 
