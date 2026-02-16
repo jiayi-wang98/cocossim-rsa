@@ -11,12 +11,51 @@
 #include "State.h"
 #include "frontends/standard/StandardArch.h"
 #include <cstdint>
+#include <algorithm>
+#include <cmath>
 #include "global.h"
 
 
 using namespace frontend::standard;
 
 bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &enqueue_job, int &total_idle, int *n_idle_units) {
+  auto *cj = dynamic_cast<CgraJob *>(j);
+  enqueue_reads();
+  enqueue_writes();
+  if (!process_stage()) {
+    return state != SystolicArray::ExState::idle;
+  }
+
+  if (cj != nullptr) {
+    switch (state) {
+      case cgra_config: {
+        int merge_factor = std::max(cgra_cluster, 1);
+        int cgra_side = std::max(sz / merge_factor, 1);
+        int n_cgra_alus = std::max(cgra_side * cgra_side, 1);
+        int work_items = std::max(1, cj->linearized_dimension * cj->parallel_dimension);
+        int stream_quanta = std::max(div_ru(work_items, n_cgra_alus), 1);
+        int ii = std::max(cj->initiation_interval, std::max(cgra_default_ii, 1));
+        int op_latency = std::max(cj->op_latency, 1);
+        int pipe_depth = std::max(cj->pipeline_depth, std::max(cgra_default_pipeline, 1));
+        int stream_cycles = pipe_depth + std::max(stream_quanta - 1, 0) * ii * op_latency;
+        state_transfer(cgra_stream, 0, 0, std::max(stream_cycles, 1));
+      } break;
+      case cgra_stream:
+        state_transfer(write, 0, std::max(cj->write_bytes, 0), 0);
+        break;
+      case write:
+        state_transfer(idle, 0, 0, 0);
+        TO_IDLE_CLEANUP();
+        break;
+      case idle:
+        break;
+      default:
+        std::cerr << "Unexpected systolic state while processing CGRA job..." << std::endl;
+        throw std::exception();
+    }
+    return state != SystolicArray::ExState::idle;
+  }
+
   auto *sj = (SysArrayJob *) j;
   auto is_last_tile = [&](int row, int col) {
     return row == loop_row_tiles && col == loop_cols_tiles;
@@ -42,11 +81,8 @@ bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &e
     return weight_preload + activation_preload;
   };
 
-  enqueue_reads();
-  enqueue_writes();
-  if (process_stage()) {
-    if (ws) {  // Weight Stationary mode
-      switch (state) {
+  if (ws) {  // Weight Stationary mode
+    switch (state) {
         case prefetch:  // Load weights into systolic array
           {
             int next_read_preload = 0;
@@ -138,9 +174,9 @@ bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &e
         } break;
         case idle:
           break;
-      }
-    } else {  // Output Stationary mode
-      switch (state) {
+    }
+  } else {  // Output Stationary mode
+    switch (state) {
         case read:  // Read weights and activations
           state_transfer(shift, 0, 0, sz * std::min(systolic_fpu_latency, batch_size));
           break;
@@ -178,7 +214,6 @@ bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &e
         default:
           std::cerr << "Caught in unexpected state in Output Stationary Systolic Array..." << std::endl;
           throw std::exception();
-      }
     }
   }
   return state != SystolicArray::ExState::idle;
@@ -204,6 +239,19 @@ void SystolicArray::SysArrayState::init_row_loop(bool new_row) {
 }
 
 void SystolicArray::SysArrayState::init() {
+  auto *cj = dynamic_cast<CgraJob *>(j);
+  if (cj != nullptr) {
+    UPDATE_STATE(SystolicArray::cgra_config);
+    int cfg_cycles = std::max(1, int(std::ceil(cgra_cfg_ratio * float(sz))));
+    int read_amt = cj->is_prebuffered ? 0 : std::max(cj->read_bytes, 0);
+    state_transfer(SystolicArray::cgra_config, read_amt, 0, cfg_cycles);
+    loop_row_tiles = 1;
+    loop_cols_tiles = 1;
+    row_i = 1;
+    col_i = 1;
+    return;
+  }
+
   auto sj = (SysArrayJob *) j;
   if (j->is_done) {
     std::cerr << "ERROR" << std::endl;
@@ -236,8 +284,24 @@ void SystolicArray::SysArrayState::init() {
     throw std::runtime_error("loop_cols_tiles == 0");
 }
 
-SystolicArray::SysArrayState::SysArrayState(int sz, bool ws, bool ws_double_buffer)
-    : State(1), sz(sz), ws(ws), ws_double_buffer(ws_double_buffer), state(SystolicArray::idle) {
+SystolicArray::SysArrayState::SysArrayState(int sz,
+                                            bool ws,
+                                            bool ws_double_buffer,
+                                            bool reuse_sa_for_vu,
+                                            int cgra_cluster,
+                                            float cgra_cfg_ratio,
+                                            int cgra_default_ii,
+                                            int cgra_default_pipeline)
+    : State(1),
+      sz(sz),
+      ws(ws),
+      ws_double_buffer(ws_double_buffer),
+      reuse_sa_for_vu(reuse_sa_for_vu),
+      cgra_cluster(std::max(cgra_cluster, 1)),
+      cgra_cfg_ratio(std::max(cgra_cfg_ratio, 0.0f)),
+      cgra_default_ii(std::max(cgra_default_ii, 1)),
+      cgra_default_pipeline(std::max(cgra_default_pipeline, 1)),
+      state(SystolicArray::idle) {
   beats_per_wb = std::max((sz * sz * data_type_width * batch_size) / bytes_per_tx, 1);
 }
 
@@ -247,4 +311,30 @@ SystolicArray::SysArrayJob::SysArrayJob(int m, int k, int n)
 
 std::string SystolicArray::SysArrayJob::get_job_dims_string() const {
   return std::to_string(M) + " x " + std::to_string(K) + " x " + std::to_string(N);
+}
+
+SystolicArray::CgraJob::CgraJob(int linearized_dimension,
+                                int parallel_dimension,
+                                SystolicArray::CgraOp op,
+                                int op_latency,
+                                int initiation_interval,
+                                int pipeline_depth,
+                                int read_bytes,
+                                int write_bytes,
+                                bool is_prebuffered)
+    : Job(std::max(read_bytes + write_bytes, 1)),
+      linearized_dimension(linearized_dimension),
+      parallel_dimension(parallel_dimension),
+      op(op),
+      op_latency(std::max(op_latency, 1)),
+      initiation_interval(std::max(initiation_interval, 1)),
+      pipeline_depth(std::max(pipeline_depth, 1)),
+      read_bytes(std::max(read_bytes, 0)),
+      write_bytes(std::max(write_bytes, 0)),
+      is_prebuffered(is_prebuffered) {}
+
+std::string SystolicArray::CgraJob::get_job_dims_string() const {
+  return "CGRA op=" + std::to_string(op) +
+         " dims=" + std::to_string(parallel_dimension) +
+         " x " + std::to_string(linearized_dimension);
 }

@@ -17,6 +17,8 @@
 #include <functional>
 #include <stdexcept>
 #include <cmath>
+#include <algorithm>
+#include <unordered_set>
 
 using namespace frontend::standard;
 
@@ -42,6 +44,266 @@ JobList createSAJobs(int m, int k, int n, int num_jobs, int n_cores = 1) {
 
 static const std::vector<std::pair<VectorUnit::VPUPhase, int>> softmax_phases =
     {{VectorUnit::VPUPhase::BROADCAST, 1}, {VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::BROADCAST, 1}};
+
+namespace {
+  struct CoreChunk {
+    int core = 0;
+    int par_dim = 0;
+  };
+
+  int elems_to_bytes(int elems) {
+    return std::max(elems, 0) * data_type_width * batch_size;
+  }
+
+  std::vector<CoreChunk> split_parallel_to_cores(int total_parallel, int n_cores) {
+    std::vector<CoreChunk> chunks;
+    int cores = std::max(n_cores, 1);
+    int base = total_parallel / cores;
+    int rem = total_parallel % cores;
+    for (int core = 0; core < cores; ++core) {
+      int par = base + (core < rem ? 1 : 0);
+      if (par > 0) {
+        chunks.push_back({core, par});
+      }
+    }
+    return chunks;
+  }
+
+  SystolicArray::CgraJob *make_cgra_job(int core_id,
+                                        int lin_dim,
+                                        int par_dim,
+                                        SystolicArray::CgraOp op,
+                                        int read_elems,
+                                        int write_elems,
+                                        bool is_prebuffered,
+                                        const ArchConfig &a_config,
+                                        int op_latency_mul = 1,
+                                        int ii_mul = 1,
+                                        int pipe_mul = 1) {
+    auto *job = new SystolicArray::CgraJob(
+        lin_dim,
+        par_dim,
+        op,
+        std::max(op_latency_mul, 1),
+        std::max(a_config.cgra_default_ii * std::max(ii_mul, 1), 1),
+        std::max(a_config.cgra_default_pipeline * std::max(pipe_mul, 1), 1),
+        is_prebuffered ? 0 : elems_to_bytes(read_elems),
+        elems_to_bytes(write_elems),
+        is_prebuffered);
+    job->core_id = core_id;
+    return job;
+  }
+
+  JobPair make_activation_jobs(const ArchConfig &a_config, int lin_dim, int par_dim, bool is_prebuffered) {
+    if (!a_config.reuse_sa_for_vu) {
+      auto *job = new VectorUnit::VecUnitJob(lin_dim, par_dim, is_prebuffered, {{VectorUnit::VPUPhase::BROADCAST, 1}});
+      return {{job}, {job}};
+    }
+
+    JobList heads;
+    JobList tails;
+    for (const auto &chunk: split_parallel_to_cores(par_dim, a_config.n_cores)) {
+      auto *job = make_cgra_job(chunk.core,
+                                lin_dim,
+                                chunk.par_dim,
+                                SystolicArray::CGRA_FMA,
+                                lin_dim * chunk.par_dim,
+                                lin_dim * chunk.par_dim,
+                                is_prebuffered,
+                                a_config,
+                                1,
+                                1,
+                                1);
+      heads.push_back(job);
+      tails.push_back(job);
+    }
+    return {heads, tails};
+  }
+
+  JobPair make_softmax_jobs(const ArchConfig &a_config, int M, int heads, bool is_prebuffered) {
+    int spl = 1;
+    int Mp = M * heads;
+    if (heads * M * M * data_type_width * batch_size > buffer_size_bytes || Mp > 1024) {
+      spl = std::max(div_ru(heads * M * M * data_type_width * batch_size, buffer_size_bytes), div_ru(Mp, 1024));
+      if (spl > Mp) {
+        std::cerr << "Can't split this enough to fit inside buffer." << std::endl;
+        throw std::exception();
+      }
+      Mp /= spl;
+    }
+    std::cout << "Splitting by " << spl << std::endl;
+
+    if (!a_config.reuse_sa_for_vu) {
+      int n_jobs = div_ru(div_ru(M * heads, Mp), n_vpus);
+      JobList softmax_layer;
+      for (int i = 0; i < n_jobs; ++i) {
+        softmax_layer.push_back(new VectorUnit::VecUnitJob(M, Mp, is_prebuffered, softmax_phases));
+      }
+      return {softmax_layer, softmax_layer};
+    }
+
+    int n_jobs = std::max(div_ru(M * heads, Mp), 1);
+    JobList all_heads;
+    JobList all_tails;
+    for (int job_idx = 0; job_idx < n_jobs; ++job_idx) {
+      for (const auto &chunk: split_parallel_to_cores(Mp, a_config.n_cores)) {
+        int elems = M * chunk.par_dim;
+        auto *max_reduce = make_cgra_job(chunk.core,
+                                         M,
+                                         chunk.par_dim,
+                                         SystolicArray::CGRA_REDUCE,
+                                         elems,
+                                         chunk.par_dim,
+                                         is_prebuffered,
+                                         a_config,
+                                         1,
+                                         1,
+                                         1);
+        auto *exp_approx = make_cgra_job(chunk.core,
+                                         M,
+                                         chunk.par_dim,
+                                         SystolicArray::CGRA_EXP_APPROX,
+                                         elems + chunk.par_dim,
+                                         elems,
+                                         false,
+                                         a_config,
+                                         2,
+                                         2,
+                                         2);
+        auto *sum_reduce = make_cgra_job(chunk.core,
+                                         M,
+                                         chunk.par_dim,
+                                         SystolicArray::CGRA_REDUCE,
+                                         elems,
+                                         chunk.par_dim,
+                                         false,
+                                         a_config,
+                                         1,
+                                         1,
+                                         1);
+        auto *normalize = make_cgra_job(chunk.core,
+                                        M,
+                                        chunk.par_dim,
+                                        SystolicArray::CGRA_NORMALIZE,
+                                        elems + chunk.par_dim,
+                                        elems,
+                                        false,
+                                        a_config,
+                                        2,
+                                        1,
+                                        2);
+        max_reduce->add_child(exp_approx);
+        exp_approx->add_child(sum_reduce);
+        sum_reduce->add_child(normalize);
+        all_heads.push_back(max_reduce);
+        all_tails.push_back(normalize);
+      }
+    }
+    return {all_heads, all_tails};
+  }
+
+  JobPair make_layernorm_jobs(const ArchConfig &a_config, int lin_dim, int par_dim) {
+    if (!a_config.reuse_sa_for_vu) {
+      JobList jl;
+      int par_acc = par_dim;
+      int dec_amt = std::max(buffer_size_bytes / data_type_width / lin_dim, 1);
+      while (par_acc > 0) {
+        jl.push_back(new VectorUnit::VecUnitJob(lin_dim, std::min(dec_amt, par_acc), false,
+                                                {{VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::REDUCE, 4}, {VectorUnit::VPUPhase::BROADCAST, 1}}));
+        par_acc -= dec_amt;
+      }
+      return {jl, jl};
+    }
+
+    JobList all_heads;
+    JobList all_tails;
+    int par_acc = par_dim;
+    int dec_amt = std::max(buffer_size_bytes / data_type_width / lin_dim, 1);
+    while (par_acc > 0) {
+      int par_chunk = std::min(dec_amt, par_acc);
+      for (const auto &chunk: split_parallel_to_cores(par_chunk, a_config.n_cores)) {
+        int elems = lin_dim * chunk.par_dim;
+        auto *mean_reduce = make_cgra_job(chunk.core,
+                                          lin_dim,
+                                          chunk.par_dim,
+                                          SystolicArray::CGRA_REDUCE,
+                                          elems,
+                                          chunk.par_dim,
+                                          false,
+                                          a_config,
+                                          1,
+                                          1,
+                                          1);
+        auto *var_reduce = make_cgra_job(chunk.core,
+                                         lin_dim,
+                                         chunk.par_dim,
+                                         SystolicArray::CGRA_REDUCE,
+                                         elems + chunk.par_dim,
+                                         chunk.par_dim,
+                                         false,
+                                         a_config,
+                                         2,
+                                         1,
+                                         2);
+        auto *normalize = make_cgra_job(chunk.core,
+                                        lin_dim,
+                                        chunk.par_dim,
+                                        SystolicArray::CGRA_NORMALIZE,
+                                        elems + chunk.par_dim,
+                                        elems,
+                                        false,
+                                        a_config,
+                                        2,
+                                        1,
+                                        2);
+        mean_reduce->add_child(var_reduce);
+        var_reduce->add_child(normalize);
+        all_heads.push_back(mean_reduce);
+        all_tails.push_back(normalize);
+      }
+      par_acc -= par_chunk;
+    }
+    return {all_heads, all_tails};
+  }
+
+  std::string make_layer_tag(const LayerConfig &cfg, int idx) {
+    std::string tag = std::to_string(idx) + "_" + cfg.layer_type;
+    for (const auto &d: cfg.dimensions) {
+      tag += "x" + std::to_string(d);
+    }
+    return tag;
+  }
+
+  void annotate_layer_jobs(const JobPair &jp, int layer_idx, const std::string &layer_tag) {
+    std::vector<Job *> stack;
+    std::unordered_set<Job *> visited;
+    for (auto *j: jp.first) {
+      if (j != nullptr) {
+        stack.push_back(j);
+      }
+    }
+    for (auto *j: jp.second) {
+      if (j != nullptr) {
+        stack.push_back(j);
+      }
+    }
+    while (!stack.empty()) {
+      Job *cur = stack.back();
+      stack.pop_back();
+      if (cur == nullptr || visited.find(cur) != visited.end()) {
+        continue;
+      }
+      visited.insert(cur);
+      cur->layer_idx = layer_idx;
+      cur->layer_name = layer_tag;
+      for (auto *child: cur->children) {
+        if (child != nullptr && visited.find(child) == visited.end()) {
+          stack.push_back(child);
+        }
+      }
+    }
+  }
+}// namespace
 
 using JobCreate_f = std::function<JobPair(const ArchConfig &, const LayerConfig &)>;
 
@@ -215,21 +477,21 @@ JobPair MatmulAct(const ArchConfig &a_config, const LayerConfig &l_config) {
     JobList matmul_layers = createSAJobs(M,
                                          a_config.sa_sz_allo,
                                          N, num_jobs);
-    JobList act_layer = {new VectorUnit::VecUnitJob(1, M * K, true, {{VectorUnit::VPUPhase::BROADCAST, 1}})};
+    JobPair act_layer = make_activation_jobs(a_config, 1, M * K, true);
 
-    connectJobLists(matmul_layers, act_layer);
+    connectJobLists(matmul_layers, act_layer.first);
 
-    return {matmul_layers, act_layer};
+    return {matmul_layers, act_layer.second};
   } else {
     int num_jobs = std::max(1, M / a_config.sa_sz_allo);
     JobList matmul_layers = createSAJobs(a_config.sa_sz_allo,
                                          K,
                                          N, num_jobs);
-    JobList act_layer = {new VectorUnit::VecUnitJob(1, M * K, true, {{VectorUnit::VPUPhase::BROADCAST, 1}})};
+    JobPair act_layer = make_activation_jobs(a_config, 1, M * K, true);
 
-    connectJobLists(matmul_layers, act_layer);
+    connectJobLists(matmul_layers, act_layer.first);
 
-    return {matmul_layers, act_layer};
+    return {matmul_layers, act_layer.second};
   }
 }
 
@@ -250,24 +512,24 @@ JobPair ActMatmul(const ArchConfig &a_config, const LayerConfig &l_config) {
   }
 
   // Create activation layer job
-  JobList act_layer = {new VectorUnit::VecUnitJob(1, M * K, true, {{VectorUnit::VPUPhase::BROADCAST, 1}})};
+  JobPair act_layer = make_activation_jobs(a_config, 1, M * K, true);
 
   if (a_config.ws) {
     int num_jobs = std::max(1, K / a_config.sa_sz_allo);
     JobList matmul_layers = createSAJobs(M,
                                          a_config.sa_sz_allo,
                                          N, num_jobs);
-    connectJobLists(act_layer, matmul_layers);
+    connectJobLists(act_layer.second, matmul_layers);
 
-    return {act_layer, matmul_layers};
+    return {act_layer.first, matmul_layers};
   } else {
     int num_jobs = std::max(1, M / a_config.sa_sz_allo);
     JobList matmul_layers = createSAJobs(a_config.sa_sz_allo,
                                          K,
                                          N, num_jobs);
-    connectJobLists(act_layer, matmul_layers);
+    connectJobLists(act_layer.second, matmul_layers);
 
-    return {act_layer, matmul_layers};
+    return {act_layer.first, matmul_layers};
   }
 }
 
@@ -294,24 +556,14 @@ JobPair LayerNorm(const ArchConfig &a_config, const LayerConfig &l_config) {
       std::cout << "Unexpected number of dimensions received in LayerNorm" << std::endl;
       throw std::exception();
   }
-  // Create jobs with buffer size constraints
-  JobList jl;
-  int par_acc = par_dim;
-  int dec_amt = buffer_size_bytes / data_type_width / lin_dim;
-  while (par_acc > 0) {
-    jl.push_back(new VectorUnit::VecUnitJob(lin_dim, std::min(dec_amt, par_acc), false,
-                                            {{VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::REDUCE, 4}, {VectorUnit::VPUPhase::BROADCAST, 1}}));
-    par_acc -= dec_amt;
-  }
-  return {{jl}, {jl}};
+  return make_layernorm_jobs(a_config, lin_dim, par_dim);
 }
 
 JobPair Activation(const ArchConfig &a_config, const LayerConfig &l_config) {
   int sz = 1;
   for (const auto &dim: l_config.dimensions) sz *= dim;
 
-  auto job = new VectorUnit::VecUnitJob(1, sz, false, {{VectorUnit::VPUPhase::BROADCAST, 1}});
-  return {{job}, {job}};
+  return make_activation_jobs(a_config, 1, sz, false);
 }
 
 JobPair Softmax(const ArchConfig &a_config, const LayerConfig &l_config) {
@@ -327,24 +579,7 @@ JobPair Softmax(const ArchConfig &a_config, const LayerConfig &l_config) {
     throw std::exception();
   }
 
-  int spl = 1;
-  int Mp = M * heads;
-  if (heads * M * M * data_type_width * batch_size > buffer_size_bytes || Mp > 1024) {
-    spl = std::max(div_ru(heads * M * M * data_type_width * batch_size, buffer_size_bytes), div_ru(Mp, 1024));
-    if (spl > Mp) {
-      std::cerr << "Can't split this enough to fit inside buffer." << std::endl;
-      throw std::exception();
-    }
-    Mp /= spl;
-  }
-  std::cout << "Splitting by " << spl << std::endl;
-
-  int n_jobs = div_ru(div_ru(M * heads, Mp), n_vpus);
-  JobList softmax_layer;
-  for (int i = 0; i < n_jobs; ++i)
-    softmax_layer.push_back(new VectorUnit::VecUnitJob(M, Mp, false, softmax_phases));
-
-  return {softmax_layer, softmax_layer};
+  return make_softmax_jobs(a_config, M, heads, false);
 }
 
 JobPair SelfAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
@@ -375,7 +610,7 @@ JobPair SelfAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
     auto Dot1 = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, N / n_heads, M}));
     auto Dot2 = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, M, N / n_heads}));
     auto O_proj = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, N / n_heads, K}));
-    auto softmax_layer = Softmax(a_config, LayerConfig("Softmax", {8, M}));
+    auto softmax_layer = make_softmax_jobs(a_config, M, n_heads, false);
 
     // Chain operations: K->Q->V->QK^T->softmax->attention*V->output
     connectJobs(K_proj, Q_proj);
@@ -406,12 +641,11 @@ JobPair SelfAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
                                   K,
                                   N, num_jobs);
 
-    JobList softmax_layer = {new VectorUnit::VecUnitJob(M, M, true,
-                                                        {{VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::BROADCAST, 1}})};
+    JobPair softmax_layer = make_softmax_jobs(a_config, M, 1, true);
     connectJobLists(K_proj, Q_proj);
     connectJobLists(Q_proj, Dot1);
-    connectJobLists(Dot1, softmax_layer);
-    connectJobLists(softmax_layer, V_proj);
+    connectJobLists(Dot1, softmax_layer.first);
+    connectJobLists(softmax_layer.second, V_proj);
     connectJobLists(V_proj, Dot2);
     connectJobLists(Dot2, O_proj);
 
@@ -444,7 +678,10 @@ JobCreate_f getLayerLambda(const std::string &layer_type) {
     return MatmulAct;
   if (layer_type == "Softmax")
     return Softmax;
-  if (layer_type == "Activation")
+  if (layer_type == "Activation" || layer_type == "ReLU")
+    return Activation;
+  // BatchNorm is treated as a vector activation-style pass in this frontend.
+  if (layer_type == "BatchNorm")
     return Activation;
   if (layer_type == "LayerNorm")
     return LayerNorm;
@@ -462,9 +699,14 @@ std::vector<JobPair> StandardLayer::make_layers(const std::vector<LayerConfig> &
   JobList jp;
   for (int m = 0; m < model_parallelism; ++m) {
     std::vector<JobPair> lists;
+    int layer_idx = 0;
     for (const auto &layer_config: layer_configs) {
       auto layer_f = getLayerLambda(layer_config.layer_type);
-      lists.push_back(layer_f(arch_config, layer_config));
+      JobPair layer_jobs = layer_f(arch_config, layer_config);
+      int global_layer_idx = m * static_cast<int>(layer_configs.size()) + layer_idx;
+      annotate_layer_jobs(layer_jobs, global_layer_idx, make_layer_tag(layer_config, global_layer_idx));
+      lists.push_back(layer_jobs);
+      layer_idx++;
     }
     std::cout << "list size: " << lists.size() << std::endl;
     for (int i = 1; i < lists.size(); ++i) {

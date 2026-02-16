@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <string>
 #include <vector>
 
 extern uint64_t alloc_addr;
@@ -24,6 +25,8 @@ struct Job {
   int task_idx;
   int core_id = -1;  // Core ID for parallel scheduling (-1 = any core)
   int job_idx;
+  int layer_idx = -1;
+  std::string layer_name;
 
   std::vector<Job *> children;
 
@@ -50,6 +53,7 @@ struct Job {
               << ", Address: 0x" << std::hex << addr
               << ", Task Index: " << std::dec << task_idx
               << ", Core ID: " << core_id
+              << ", Layer: " << layer_name
               << ", Remaining Dependencies: " << rem_deps
               << ", Children Count: " << children.size() << std::endl;
   }

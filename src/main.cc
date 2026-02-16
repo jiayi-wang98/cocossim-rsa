@@ -24,6 +24,7 @@ using MyLayerParser = StandardLayer;
 
 int main(int argc, char **argv) {
   MyArchParser archParser(argc, argv);
+  archParser.parse_early_runtime_overrides();
   MyLayerParser layerParser;
 
   auto t1 = std::chrono::high_resolution_clock::now();
@@ -47,14 +48,31 @@ int main(int argc, char **argv) {
   // Parse layer configuration file (format: layer_name dim1 dim2 ... dim8)
   int n_layers = 0;
   while (std::getline(layer_stream, line)) {
-    const char *nt_buff = line.c_str();
+    auto content_start = line.find_first_not_of(" \t\r\n");
+    if (content_start == std::string::npos || line[content_start] == '#') {
+      continue;
+    }
+
+    std::string parse_line = line.substr(content_start);
+    auto comment_pos = parse_line.find('#');
+    if (comment_pos != std::string::npos) {
+      parse_line = parse_line.substr(0, comment_pos);
+    }
+
+    auto content_end = parse_line.find_last_not_of(" \t\r\n");
+    if (content_end == std::string::npos) {
+      continue;
+    }
+    parse_line.resize(content_end + 1);
+
+    const char *nt_buff = parse_line.c_str();
     LayerConfig l_config;
     char nm[64] = {0};
-    std::cout << "processing " << line << std::endl;
+    std::cout << "processing " << parse_line << std::endl;
     
     // Parse up to 8 dimensions per layer
     std::vector<int> dims(8);
-    int successes = sscanf(nt_buff, "%s %d %d %d %d %d %d %d %d",
+    int successes = sscanf(nt_buff, "%63s %d %d %d %d %d %d %d %d",
                            nm,
                            &dims[0], &dims[1], &dims[2], &dims[3],
                            &dims[4], &dims[5], &dims[6], &dims[7]);
@@ -109,6 +127,33 @@ int main(int argc, char **argv) {
       fprintf(f, "%s %f\n", arch->states[i]->get_ty_string().c_str(), res[p].pct_active[i]);
     }
   }
+  fprintf(f, "CGRA_MODE_SWITCH_CYCLES %llu\n", static_cast<unsigned long long>(arch->cgra_mode_switch_cycles));
+  fprintf(f, "LAYER_BREAKDOWN_BEGIN\n");
+  for (const auto &pr: arch->layer_runtime_stats) {
+    const int layer_idx = pr.first;
+    const auto &ls = pr.second;
+    uint64_t first = ls.first_cycle;
+    uint64_t last = ls.last_cycle;
+    if (ls.active_cycles == 0) {
+      first = 0;
+      last = 0;
+    }
+    const uint64_t window_cycles = ls.active_cycles > 0 ? (last - first + 1) : 0;
+    fprintf(f,
+            "LAYER %d %s ACTIVE %llu WINDOW %llu FIRST %llu LAST %llu SA %llu VU %llu CGRA_CFG %llu CGRA_STREAM %llu CGRA_WRITE %llu\n",
+            layer_idx,
+            ls.layer_name.c_str(),
+            static_cast<unsigned long long>(ls.active_cycles),
+            static_cast<unsigned long long>(window_cycles),
+            static_cast<unsigned long long>(first),
+            static_cast<unsigned long long>(last),
+            static_cast<unsigned long long>(ls.sa_cycles),
+            static_cast<unsigned long long>(ls.vu_cycles),
+            static_cast<unsigned long long>(ls.cgra_config_cycles),
+            static_cast<unsigned long long>(ls.cgra_stream_cycles),
+            static_cast<unsigned long long>(ls.cgra_write_cycles));
+  }
+  fprintf(f, "LAYER_BREAKDOWN_END\n");
 
 
   uint64_t last_cycles = res[periods - 1].cycles;

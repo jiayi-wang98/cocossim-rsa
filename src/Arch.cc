@@ -11,6 +11,9 @@
 #include "memory.h"
 #include "perf_enums.h"
 #include "State.h"
+#include "frontends/standard/StandardUnits.h"
+#include "units/standard/SysArray.h"
+#include <algorithm>
 #include <set>
 #include <unordered_map>
 
@@ -55,6 +58,8 @@ void Arch::init_waveforms() {
 
 
 RuntimeStats_t *Arch::get_cycles(TimeBasedEnqueue &time_enqueues) {
+  layer_runtime_stats.clear();
+  cgra_mode_switch_cycles = 0;
   int n_types;
   {
     std::set<int> a;
@@ -134,6 +139,40 @@ RuntimeStats_t *Arch::get_cycles(TimeBasedEnqueue &time_enqueues) {
 
   auto *per_array_act = new uint64_t[states.size()];
   memset(per_array_act, 0, sizeof(uint64_t) * (states.size()));
+
+  auto accumulate_layer_runtime = [&](State *state) {
+    if (state == nullptr || state->j == nullptr) {
+      return;
+    }
+    Job *job = state->j;
+    if (job->layer_idx < 0) {
+      return;
+    }
+    auto &st = layer_runtime_stats[job->layer_idx];
+    if (st.layer_name.empty()) {
+      st.layer_name = job->layer_name;
+    }
+    st.active_cycles++;
+    st.first_cycle = std::min(st.first_cycle, gcycles);
+    st.last_cycle = std::max(st.last_cycle, gcycles);
+    if (state->get_ty_idx() == SYSTOLIC_ARRAY_IDX) {
+      st.sa_cycles++;
+      auto *cgra_job = dynamic_cast<SystolicArray::CgraJob *>(job);
+      if (cgra_job != nullptr) {
+        auto sa_state = static_cast<SystolicArray::ExState>(state->get_state());
+        if (sa_state == SystolicArray::cgra_config) {
+          st.cgra_config_cycles++;
+          cgra_mode_switch_cycles++;
+        } else if (sa_state == SystolicArray::cgra_stream) {
+          st.cgra_stream_cycles++;
+        } else if (sa_state == SystolicArray::write) {
+          st.cgra_write_cycles++;
+        }
+      }
+    } else if (state->get_ty_idx() == VECTOR_UNIT_IDX) {
+      st.vu_cycles++;
+    }
+  };
 
 
   std::function<void(int)> write_stats = [&](int phase_idx) -> void {
@@ -241,6 +280,7 @@ RuntimeStats_t *Arch::get_cycles(TimeBasedEnqueue &time_enqueues) {
       bool is_active = states[i]->increment(enqueue_job, total_idle, n_idle_units);
       if (is_active) {
         per_array_act[i]++;
+        accumulate_layer_runtime(states[i]);
       }
     }
 

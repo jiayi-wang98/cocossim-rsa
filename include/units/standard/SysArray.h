@@ -13,6 +13,17 @@
 #include "frontends/standard/StandardUnits.h"
 
 namespace SystolicArray {
+  enum CgraOp {
+    CGRA_FMA = 0,
+    CGRA_LOGIC,
+    CGRA_COMPARE,
+    CGRA_INT16_OP,
+    CGRA_CONVERT,
+    CGRA_REDUCE,
+    CGRA_EXP_APPROX,
+    CGRA_NORMALIZE
+  };
+
   struct SysArrayJob : Job {
 
     int get_type() const override {
@@ -25,18 +36,61 @@ namespace SystolicArray {
     [[nodiscard]] std::string get_job_dims_string() const override;
   };
 
+  struct CgraJob : Job {
+    int linearized_dimension;
+    int parallel_dimension;
+    CgraOp op;
+    int op_latency;
+    int initiation_interval;
+    int pipeline_depth;
+    int read_bytes;
+    int write_bytes;
+    bool is_prebuffered;
+
+    CgraJob(int linearized_dimension,
+            int parallel_dimension,
+            CgraOp op,
+            int op_latency,
+            int initiation_interval,
+            int pipeline_depth,
+            int read_bytes,
+            int write_bytes,
+            bool is_prebuffered);
+
+    int get_type() const override {
+      return SYSTOLIC_ARRAY_IDX;
+    }
+
+    [[nodiscard]] std::string get_job_dims_string() const override;
+  };
+
   enum ExState {
     idle = 0,
     prefetch,//only WS
     read,
     shift,
-    write
+    write,
+    cgra_config,
+    cgra_stream
   };
 
   struct SysArrayState : State {
 public:
-    explicit SysArrayState(int sz, bool ws);
+    explicit SysArrayState(int sz,
+                           bool ws,
+                           bool ws_double_buffer = false,
+                           bool reuse_sa_for_vu = false,
+                           int cgra_cluster = 4,
+                           float cgra_cfg_ratio = 1.0f,
+                           int cgra_default_ii = 1,
+                           int cgra_default_pipeline = 8);
     bool ws = false;// Flag for weight-stationary systolic array
+    bool ws_double_buffer = false;// WS mode with idealized overlap
+    bool reuse_sa_for_vu = false;
+    int cgra_cluster = 4;
+    float cgra_cfg_ratio = 1.0f;
+    int cgra_default_ii = 1;
+    int cgra_default_pipeline = 8;
 
     void init_row_loop(bool new_row);
     void init() override;
