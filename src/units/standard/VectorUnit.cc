@@ -122,7 +122,7 @@ VecUnitJob::VecUnitJob(int linearizedDimension,
                        int parallelDimension,
                        bool is_prebuffered,
                        const std::queue<std::pair<VPUPhase, int>> &phases)
-    : Job(linearizedDimension * parallelDimension * data_type_width * batch_size),
+    : Job(2 * uint64_t(linearizedDimension) * parallelDimension * data_type_width * batch_size),  // reads, then writes
       linearized_dimension(linearizedDimension),
       parallel_dimension(parallelDimension),
       is_prebuffered(is_prebuffered),
@@ -132,7 +132,7 @@ VecUnitJob::VecUnitJob(int linearizedDimension,
                        int parallelDimension,
                        bool is_prebuffered,
                        const std::vector<std::pair<VPUPhase, int>> &vphases)
-    : Job(linearizedDimension * parallelDimension * data_type_width * batch_size),
+    : Job(2 * uint64_t(linearizedDimension) * parallelDimension * data_type_width * batch_size),  // reads, then writes
       linearized_dimension(linearizedDimension),
       parallel_dimension(parallelDimension),
       is_prebuffered(is_prebuffered) {

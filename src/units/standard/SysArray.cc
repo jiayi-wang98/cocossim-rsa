@@ -179,7 +179,10 @@ SystolicArray::SysArrayState::SysArrayState(int sz, bool ws) : State(1), sz(sz),
 }
 
 SystolicArray::SysArrayJob::SysArrayJob(int m, int k, int n)
-    : Job(m * m * n * data_type_width * batch_size * 2 + n * m * data_type_width * batch_size), M(m), K(k), N(n) {}
+    // Address range the job walks through: activations (read up to twice in WS), weights and output.
+    // 64-bit arithmetic: the old int expression (m*m*n) overflowed for large layers and gave
+    // concurrent jobs overlapping addresses.
+    : Job((2 * uint64_t(m) * k + uint64_t(k) * n + uint64_t(m) * n) * data_type_width * batch_size), M(m), K(k), N(n) {}
 
 
 std::string SystolicArray::SysArrayJob::get_job_dims_string() const {
