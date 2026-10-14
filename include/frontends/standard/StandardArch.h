@@ -18,7 +18,13 @@ namespace frontend::standard {
     int sa_sz_allo = -1;
     int vu_sz_allo = -1;
     bool ws = false;
-    ArchConfig(int n_cores, int sa_sz_allo, int vu_sz_allo, bool ws): n_cores(n_cores), sa_sz_allo(sa_sz_allo), vu_sz_allo(vu_sz_allo), ws(ws) {}
+    // How WS GEMMs and vector layers are partitioned over the cores:
+    //   0: split N evenly over all cores; vector rows spread over all VUs
+    //   1: the TPUv3-fitted policy of the published COCOSSim validation (see tpu_gemm_jobs), with every
+    //      partition simulated on its own core
+    int gemm_sched = 0;
+    ArchConfig(int n_cores, int sa_sz_allo, int vu_sz_allo, bool ws, int gemm_sched = 0)
+        : n_cores(n_cores), sa_sz_allo(sa_sz_allo), vu_sz_allo(vu_sz_allo), ws(ws), gemm_sched(gemm_sched) {}
     ArchConfig() = default;
   };
 

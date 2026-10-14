@@ -1,0 +1,1142 @@
+[
+ {
+  "i": 0,
+  "name": "Matmul",
+  "dims": [
+   4096,
+   320,
+   320
+  ],
+  "cycles": 81711,
+  "us": 86.92659574468085,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.998776
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 92.8,
+  "err_pct": -6.329099413059423
+ },
+ {
+  "i": 1,
+  "name": "Matmul",
+  "dims": [
+   1024,
+   640,
+   640
+  ],
+  "cycles": 60736,
+  "us": 64.61276595744681,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.998354
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 74,
+  "err_pct": -12.685451408855661
+ },
+ {
+  "i": 2,
+  "name": "Matmul",
+  "dims": [
+   256,
+   1280,
+   1280
+  ],
+  "cycles": 79368,
+  "us": 84.43404255319149,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.99874
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 86,
+  "err_pct": -1.82088075210292
+ },
+ {
+  "i": 3,
+  "name": "Matmul",
+  "dims": [
+   64,
+   1280,
+   1280
+  ],
+  "cycles": 40734,
+  "us": 43.33404255319149,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.997545
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 41.6,
+  "err_pct": 4.168371522094918
+ },
+ {
+  "i": 4,
+  "name": "DotProduct",
+  "dims": [
+   8,
+   4096,
+   40,
+   4096
+  ],
+  "cycles": 805170,
+  "us": 856.563829787234,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.136331
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.998758
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.136331
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    93.93805
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 944,
+  "err_pct": -9.26230616660657
+ },
+ {
+  "i": 5,
+  "name": "DotProduct",
+  "dims": [
+   8,
+   1024,
+   80,
+   1024
+  ],
+  "cycles": 54852,
+  "us": 58.353191489361706,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.998177
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.987238
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    82.98877
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    83.907606
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 55,
+  "err_pct": 6.096711798839465
+ },
+ {
+  "i": 6,
+  "name": "DotProduct",
+  "dims": [
+   8,
+   256,
+   160,
+   256
+  ],
+  "cycles": 26128,
+  "us": 27.795744680851065,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.996173
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 42.4,
+  "err_pct": -34.443998394219186
+ },
+ {
+  "i": 7,
+  "name": "DotProduct",
+  "dims": [
+   8,
+   64,
+   160,
+   64
+  ],
+  "cycles": 3332,
+  "us": 3.5446808510638297,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.969988
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 2.2,
+  "err_pct": 61.1218568665377
+ },
+ {
+  "i": 8,
+  "name": "Conv",
+  "dims": [
+   4096,
+   2880,
+   320
+  ],
+  "cycles": 182927,
+  "us": 194.6031914893617,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    97.675029
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    98.433801
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.999453
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.989613
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 238,
+  "err_pct": -18.233953155730376
+ },
+ {
+  "i": 9,
+  "name": "Conv",
+  "dims": [
+   1024,
+   5760,
+   640
+  ],
+  "cycles": 152401,
+  "us": 162.1287234042553,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.999344
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.998688
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    98.073503
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    97.257892
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 142,
+  "err_pct": 14.17515732694036
+ },
+ {
+  "i": 10,
+  "name": "Conv",
+  "dims": [
+   256,
+   11520,
+   1280
+  ],
+  "cycles": 187723,
+  "us": 199.70531914893618,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.961646
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.999467
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.964842
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.966973
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 168,
+  "err_pct": 18.87221377912868
+ },
+ {
+  "i": 11,
+  "name": "Conv",
+  "dims": [
+   64,
+   11520,
+   1280
+  ],
+  "cycles": 96314,
+  "us": 102.46170212765958,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    99.301244
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    99.998962
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    98.630521
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    97.300496
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 89,
+  "err_pct": 15.125508008606268
+ },
+ {
+  "i": 12,
+  "name": "Softmax",
+  "dims": [
+   8,
+   4096
+  ],
+  "cycles": 604430,
+  "us": 643.0106382978723,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    95.145344
+   ],
+   [
+    "VECTOR_UNIT",
+    99.998676
+   ],
+   [
+    "VECTOR_UNIT",
+    97.910924
+   ],
+   [
+    "VECTOR_UNIT",
+    99.986599
+   ]
+  ],
+  "tpu_us": 665,
+  "err_pct": -3.306670932650777
+ },
+ {
+  "i": 13,
+  "name": "Softmax",
+  "dims": [
+   8,
+   1024
+  ],
+  "cycles": 48844,
+  "us": 51.96170212765958,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    99.995905
+   ],
+   [
+    "VECTOR_UNIT",
+    89.566784
+   ],
+   [
+    "VECTOR_UNIT",
+    89.536074
+   ],
+   [
+    "VECTOR_UNIT",
+    90.995823
+   ]
+  ],
+  "tpu_us": 43,
+  "err_pct": 20.841167738743206
+ },
+ {
+  "i": 14,
+  "name": "Softmax",
+  "dims": [
+   8,
+   256
+  ],
+  "cycles": 2888,
+  "us": 3.072340425531915,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    99.722992
+   ],
+   [
+    "VECTOR_UNIT",
+    99.965374
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 4.022,
+  "err_pct": -23.61162542188178
+ },
+ {
+  "i": 15,
+  "name": "Softmax",
+  "dims": [
+   8,
+   64
+  ],
+  "cycles": 243,
+  "us": 0.25851063829787235,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    99.588477
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 1.08,
+  "err_pct": -76.06382978723404
+ },
+ {
+  "i": 16,
+  "name": "ResNet",
+  "dims": [
+   4096,
+   2880,
+   320,
+   32,
+   320
+  ],
+  "cycles": 401900,
+  "us": 427.5531914893617,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    90.905947
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    91.59791
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    90.896492
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    82.241851
+   ],
+   [
+    "VECTOR_UNIT",
+    8.373974
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 515.2,
+  "err_pct": -17.0121910929034
+ },
+ {
+  "i": 17,
+  "name": "ResNet",
+  "dims": [
+   1024,
+   5760,
+   640,
+   32,
+   640
+  ],
+  "cycles": 323902,
+  "us": 344.57659574468084,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    94.788238
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    94.771875
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    92.988929
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    92.35139
+   ],
+   [
+    "VECTOR_UNIT",
+    5.209909
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 324.4,
+  "err_pct": 6.219665765931217
+ },
+ {
+  "i": 18,
+  "name": "ResNet",
+  "dims": [
+   256,
+   11520,
+   1280,
+   32,
+   1280
+  ],
+  "cycles": 383038,
+  "us": 407.4872340425532,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    97.020922
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    97.2739
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    96.896391
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    95.922859
+   ],
+   [
+    "VECTOR_UNIT",
+    2.252779
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 327.2,
+  "err_pct": 24.53766321593925
+ },
+ {
+  "i": 19,
+  "name": "ResNet",
+  "dims": [
+   64,
+   11520,
+   1280,
+   32,
+   1280
+  ],
+  "cycles": 194999,
+  "us": 207.44574468085105,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    98.492813
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    98.094349
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    98.430761
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    97.15537
+   ],
+   [
+    "VECTOR_UNIT",
+    1.369751
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 203.6,
+  "err_pct": 1.8888726330309702
+ },
+ {
+  "i": 20,
+  "name": "SelfAttention",
+  "dims": [
+   8,
+   4096,
+   320,
+   320
+  ],
+  "cycles": 2193778,
+  "us": 2333.8063829787234,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    72.646184
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    51.98165
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    52.220507
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    48.106782
+   ],
+   [
+    "VECTOR_UNIT",
+    27.352631
+   ],
+   [
+    "VECTOR_UNIT",
+    26.331561
+   ],
+   [
+    "VECTOR_UNIT",
+    27.188713
+   ],
+   [
+    "VECTOR_UNIT",
+    26.197409
+   ]
+  ],
+  "tpu_us": 2536,
+  "err_pct": -7.972934425129204
+ },
+ {
+  "i": 21,
+  "name": "SelfAttention",
+  "dims": [
+   8,
+   1024,
+   640,
+   640
+  ],
+  "cycles": 276443,
+  "us": 294.08829787234043,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    83.34304
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    81.760435
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    83.531867
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    79.145791
+   ],
+   [
+    "VECTOR_UNIT",
+    15.805067
+   ],
+   [
+    "VECTOR_UNIT",
+    15.806513
+   ],
+   [
+    "VECTOR_UNIT",
+    14.074149
+   ],
+   [
+    "VECTOR_UNIT",
+    14.128048
+   ]
+  ],
+  "tpu_us": 255,
+  "err_pct": 15.328744263662916
+ },
+ {
+  "i": 22,
+  "name": "SelfAttention",
+  "dims": [
+   8,
+   256,
+   1280,
+   1280
+  ],
+  "cycles": 136958,
+  "us": 145.7,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    95.502271
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    97.751135
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    94.956118
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    90.019568
+   ],
+   [
+    "VECTOR_UNIT",
+    2.190453
+   ],
+   [
+    "VECTOR_UNIT",
+    2.199214
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 161,
+  "err_pct": -9.50310559006212
+ },
+ {
+  "i": 23,
+  "name": "SelfAttention",
+  "dims": [
+   8,
+   64,
+   1280,
+   1280
+  ],
+  "cycles": 63012,
+  "us": 67.03404255319148,
+  "units": [
+   [
+    "SYSTOLIC_ARRAY",
+    98.493938
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    98.911318
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    98.758967
+   ],
+   [
+    "SYSTOLIC_ARRAY",
+    96.241986
+   ],
+   [
+    "VECTOR_UNIT",
+    0.474513
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ],
+   [
+    "VECTOR_UNIT",
+    0.0
+   ]
+  ],
+  "tpu_us": 82,
+  "err_pct": -18.251167618059167
+ }
+]

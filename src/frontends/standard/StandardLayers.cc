@@ -57,12 +57,49 @@ static JobList createVUJobs(int lin, int par, bool is_prebuffered,
   return jobs;
 }
 
+// TPUv3-fitted WS GEMM partitioning (-gemm_sched 1). These are the scheduling rules of the published COCOSSim
+// TPUv3 validation, which simulated one MXU doing one share of the work; here every share runs on its own core.
+//  - output and one input slice fit the buffer, no forced split: one job on whichever SA is free (the TPU often
+//    leaves the other MXUs idle on such GEMMs); a Conv with K > 2048 is instead split 4 ways along K
+//  - otherwise N is split over split_by cores (all cores if it splits into at least n_cores / 2 buffer-sized
+//    chunks, else one core per chunk), each core walking its share in buffer-sized chunks
+//  - force_split overrides split_by (used by SelfAttention, as in the validated model)
+static JobList tpu_gemm_jobs(const ArchConfig &a_config, int M, int K, int N, int force_split, bool is_conv) {
+  const int sz = a_config.sa_sz_allo, ncore = std::max(1, a_config.n_cores);
+  int64_t need = (int64_t(M) * N + int64_t(M) * std::min(K, sz)) * batch_size * data_type_width;
+  JobList jl;
+  if (need <= buffer_size_bytes && force_split == -1) {
+    int ksplit = (is_conv && K > 2048) ? std::min(4, ncore) : 1;
+    for (int c = 0; c < ksplit; ++c) {
+      auto *job = new SystolicArray::SysArrayJob(M, K / ksplit, N);
+      job->core_id = ksplit > 1 ? c : -1;
+      jl.push_back(job);
+    }
+    return jl;
+  }
+  int n_max = std::max(1, (int) std::floor(double(buffer_size_bytes) / double(data_type_width * M * batch_size)) - sz);
+  int splitability = div_ru(N, n_max);
+  int split_by = force_split != -1 ? force_split : (splitability >= ncore / 2 ? ncore : splitability);
+  auto parts = split_even(N, std::max(1, std::min(split_by, ncore)));
+  for (int c = 0; c < (int) parts.size(); ++c) {
+    for (int done = 0; done < parts[c]; done += n_max) {
+      auto *job = new SystolicArray::SysArrayJob(M, K, std::min(n_max, parts[c] - done));
+      job->core_id = c;
+      jl.push_back(job);
+    }
+  }
+  return jl;
+}
+
 static const std::vector<std::pair<VectorUnit::VPUPhase, int>> softmax_phases =
     {{VectorUnit::VPUPhase::BROADCAST, 1}, {VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::BROADCAST, 1}};
 
 using JobCreate_f = std::function<JobPair(const ArchConfig &, const LayerConfig &)>;
 
-JobPair Matmul(const ArchConfig &a_config, const LayerConfig &l_config) {
+JobPair MatmulSplit(const ArchConfig &a_config, const LayerConfig &l_config, int force_split);
+JobPair Matmul(const ArchConfig &a_config, const LayerConfig &l_config) { return MatmulSplit(a_config, l_config, -1); }
+
+JobPair MatmulSplit(const ArchConfig &a_config, const LayerConfig &l_config, int force_split) {
   int M, K, N;
   if (l_config.dimensions.size() == 3) {
     M = l_config.dimensions[0];
@@ -77,6 +114,10 @@ JobPair Matmul(const ArchConfig &a_config, const LayerConfig &l_config) {
     throw std::exception();
   }
 
+  if (a_config.ws && a_config.gemm_sched == 1) {
+    JobList jl = tpu_gemm_jobs(a_config, M, K, N, force_split, false);
+    return {jl, jl};
+  }
   if (a_config.ws) {
     JobList jl;
     
@@ -128,6 +169,13 @@ JobPair Conv(const ArchConfig &a_config, const LayerConfig &l_config) {
   // Conv layer parameters: batch, input_channels, input_height, input_width, output_channels, kernel_size, stride, padding
   // A 3-dim Conv is already in im2col GEMM form (M K N), as in the TPU validation workloads.
   if (l_config.dimensions.size() == 3) {
+    M = l_config.dimensions[0];
+    K = l_config.dimensions[1];
+    N = l_config.dimensions[2];
+    if (a_config.ws && a_config.gemm_sched == 1) {
+      JobList jl = tpu_gemm_jobs(a_config, M, K, N, -1, true);
+      return {jl, jl};
+    }
     return Matmul(a_config, l_config);
   }
   if (l_config.dimensions.size() < 5) {
@@ -164,6 +212,10 @@ JobPair Conv(const ArchConfig &a_config, const LayerConfig &l_config) {
   std::cout << "           out_h=" << output_height << ", out_w=" << output_width << std::endl;
   std::cout << "           GEMM dimensions: M=" << M << ", K=" << K << ", N=" << N << std::endl;
 
+  if (a_config.ws && a_config.gemm_sched == 1) {
+    JobList jl = tpu_gemm_jobs(a_config, M, K, N, -1, true);
+    return {jl, jl};
+  }
   if (a_config.ws) {
     JobList jl;
     
@@ -315,7 +367,7 @@ JobPair LayerNorm(const ArchConfig &a_config, const LayerConfig &l_config) {
   int dec_amt = std::max(1, buffer_size_bytes / data_type_width / lin_dim);
   JobList jl = createVUJobs(lin_dim, par_dim, false,
                             {{VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::REDUCE, 4}, {VectorUnit::VPUPhase::BROADCAST, 1}},
-                            a_config.n_cores, dec_amt);
+                            a_config.gemm_sched == 1 ? 1 : a_config.n_cores, dec_amt);
   return {jl, jl};
 }
 
@@ -323,7 +375,7 @@ JobPair Activation(const ArchConfig &a_config, const LayerConfig &l_config) {
   int sz = 1;
   for (const auto &dim: l_config.dimensions) sz *= dim;
 
-  JobList jl = createVUJobs(1, sz, false, {{VectorUnit::VPUPhase::BROADCAST, 1}}, a_config.n_cores);
+  JobList jl = createVUJobs(1, sz, false, {{VectorUnit::VPUPhase::BROADCAST, 1}}, a_config.gemm_sched == 1 ? 1 : a_config.n_cores);
   return {jl, jl};
 }
 
@@ -347,7 +399,7 @@ JobPair Softmax(const ArchConfig &a_config, const LayerConfig &l_config) {
   int rows = M * heads;
   int64_t row_bytes = int64_t(M) * data_type_width * batch_size;
   int max_rows = int(std::max<int64_t>(1, std::min<int64_t>(1024, buffer_size_bytes / row_bytes)));
-  JobList softmax_layer = createVUJobs(M, rows, false, softmax_phases, a_config.n_cores, max_rows);
+  JobList softmax_layer = createVUJobs(M, rows, false, softmax_phases, a_config.gemm_sched == 1 ? 1 : a_config.n_cores, max_rows);
   std::cout << "Softmax: " << rows << " rows in " << softmax_layer.size() << " jobs" << std::endl;
   return {softmax_layer, softmax_layer};
 }
@@ -372,14 +424,16 @@ JobPair SelfAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
 
   if (a_config.ws) {
     // Create K, Q, V projection matrices
-    auto K_proj = Matmul(a_config, LayerConfig("Matmul", {M, K, N}));
-    auto Q_proj = Matmul(a_config, LayerConfig("Matmul", {M, K, N}));
-    auto V_proj = Matmul(a_config, LayerConfig("Matmul", {M, K, N}));
+    // forced splits are those of the validated TPUv3 model; they only apply with -gemm_sched 1
+    int fs_proj = N > 320 ? 4 : -1, fs_dot = 4, fs_out = N > 320 ? 4 : 1;
+    auto K_proj = MatmulSplit(a_config, LayerConfig("Matmul", {M, K, N}), fs_proj);
+    auto Q_proj = MatmulSplit(a_config, LayerConfig("Matmul", {M, K, N}), fs_proj);
+    auto V_proj = MatmulSplit(a_config, LayerConfig("Matmul", {M, K, N}), fs_proj);
     
     // Attention mechanism: Q*K^T and softmax(QK^T)*V
-    auto Dot1 = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, N / n_heads, M}));
-    auto Dot2 = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, M, N / n_heads}));
-    auto O_proj = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, N / n_heads, K}));
+    auto Dot1 = MatmulSplit(a_config, LayerConfig("Matmul", {n_heads, M, N / n_heads, M}), fs_dot);
+    auto Dot2 = MatmulSplit(a_config, LayerConfig("Matmul", {n_heads, M, M, N / n_heads}), fs_dot);
+    auto O_proj = MatmulSplit(a_config, LayerConfig("Matmul", {n_heads, M, N / n_heads, K}), fs_out);
     auto softmax_layer = Softmax(a_config, LayerConfig("Softmax", {n_heads, M}));
 
     // Chain operations: K->Q->V->QK^T->softmax->attention*V->output
