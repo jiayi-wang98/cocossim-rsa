@@ -70,24 +70,19 @@ RuntimeStats_t *Arch::get_cycles(TimeBasedEnqueue &time_enqueues) {
   memset(n_idle_units, 0, sizeof(int) * n_types);
   // Per-core job queues enable true parallel execution
   std::vector<std::vector<Job *>> core_queues(states.size());
-  
+  // Jobs without a core id wait here, one FIFO per unit type, and go to whichever unit of that type
+  // is idle first. (They used to be appended to the queue of the first unit of the type, so e.g.
+  // with -c 2 every vector job ran on the first VU and the second one stayed idle.)
+  std::vector<std::vector<Job *>> type_queues(n_types);
+
   std::function<void(Job *)> enqueue_job = [&](Job *job) -> void {
     if (job->core_id >= 0 && job->core_id < states.size()) {
-    core_queues[job->core_id].push_back(job);     // Specific core requested
+      if (states[job->core_id]->get_ty_idx() != job->get_type()) {
+        throw std::runtime_error("job pinned to a unit of another type");
+      }
+      core_queues[job->core_id].push_back(job);  // Specific core requested
     } else {
-      // core_id == -1: Find ANY available core of the matching type
-      bool assigned = false;
-      for (int core_idx = 0; core_idx < states.size(); ++core_idx) {
-        if (states[core_idx]->get_ty_idx() == job->get_type()) {
-          core_queues[core_idx].push_back(job);
-          assigned = true;
-          break;
-        }
-      }
-      if (!assigned) {
-        // Fallback: assign to first core (shouldn't happen if architecture is correct)
-        core_queues[0].push_back(job);
-      }
+      type_queues.at(job->get_type()).push_back(job);
     }
     total_frontier += 1;
   };
@@ -172,27 +167,35 @@ RuntimeStats_t *Arch::get_cycles(TimeBasedEnqueue &time_enqueues) {
 
     bool enqueued_job = false;
     
-    // Core-specific scheduling: each core processes its own job queue
+    // Core-specific scheduling: each core processes its own job queue; an idle unit with nothing
+    // pinned to it takes the oldest unpinned job of its type.
+    auto start_job = [&](State *state, Job *job) {
+      n_idle_units[job->get_type()] -= 1;
+      total_idle -= 1;
+      total_frontier--;
+      state->j = job;
+      LOG_TO_WAVEFORM(STAT_ID(JOB_IDX, state->vcd_idx), job->job_idx);
+      state->init();
+      enqueued_job = true;
+    };
     bool any_job_assigned = true;
     while (any_job_assigned) {
       any_job_assigned = false;
       for (int core_idx = 0; core_idx < states.size(); ++core_idx) {
-        if (!core_queues[core_idx].empty()) {
-          Job *job = core_queues[core_idx].front();
-          State *state = states[core_idx];
-          
-          if (state->get_state() == 0 && state->get_ty_idx() == job->get_type()) {
-            core_queues[core_idx].erase(core_queues[core_idx].begin());
-            n_idle_units[job->get_type()] -= 1;
-            total_idle -= 1;
-            total_frontier--;
-            
-            state->j = job;
-            LOG_TO_WAVEFORM(STAT_ID(JOB_IDX, state->vcd_idx), job->job_idx);
-            state->init();
-            enqueued_job = true;
-            any_job_assigned = true;
-          }
+        State *state = states[core_idx];
+        if (state->get_state() != 0) continue;
+        auto &cq = core_queues[core_idx];
+        auto &tq = type_queues[state->get_ty_idx()];
+        if (!cq.empty()) {
+          Job *job = cq.front();
+          cq.erase(cq.begin());
+          start_job(state, job);
+          any_job_assigned = true;
+        } else if (!tq.empty()) {
+          Job *job = tq.front();
+          tq.erase(tq.begin());
+          start_job(state, job);
+          any_job_assigned = true;
         }
       }
     }
