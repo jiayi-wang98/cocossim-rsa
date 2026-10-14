@@ -17,26 +17,43 @@
 #include <functional>
 #include <stdexcept>
 #include <cmath>
+#include <climits>
+#include <cstdint>
 
 using namespace frontend::standard;
 
-JobList createSAJobs(int m, int k, int n, int num_jobs, int n_cores = 1) {
+// Split n into at most `parts` near-equal positive pieces (the first n % parts pieces get one more).
+static std::vector<int> split_even(int n, int parts) {
+  std::vector<int> out;
+  parts = std::max(1, std::min(parts, n));
+  for (int i = 0; i < parts; ++i) out.push_back(n / parts + (i < n % parts ? 1 : 0));
+  return out;
+}
+
+JobList createSAJobs(int m, int k, int n, int num_jobs, int n_cores) {
   JobList jobs;
-  
   // Tensor parallelism: split N dimension across cores
-  int core_n = n / n_cores;
-  
-  // Per-core task counters for independent scheduling
-  static std::vector<int> core_task_counters(n_cores, 0);
-  for (int core = 0; core < n_cores; ++core) {
+  auto core_ns = split_even(n, n_cores);
+  for (int core = 0; core < (int) core_ns.size(); ++core) {
     for (int job = 0; job < num_jobs; ++job) {
-      auto sys_job = new SystolicArray::SysArrayJob(m, k, core_n);
+      auto sys_job = new SystolicArray::SysArrayJob(m, k, core_ns[core]);
       sys_job->core_id = core;  // Assign to specific core for parallel execution
-      sys_job->task_idx = core_task_counters[core]++;  // Sequential task ID per core
       jobs.push_back(sys_job);
     }
   }
-  
+  return jobs;
+}
+
+// Vector work of `par` independent rows of length `lin`, split across the VUs (rows per job capped at
+// max_par, e.g. by the on-chip buffer). Jobs carry no core id, so any idle VU picks them up.
+static JobList createVUJobs(int lin, int par, bool is_prebuffered,
+                            const std::vector<std::pair<VectorUnit::VPUPhase, int>> &phases,
+                            int n_cores, int max_par = INT32_MAX) {
+  JobList jobs;
+  int per_job = std::max(1, std::min(max_par, (par + n_cores - 1) / n_cores));
+  for (int done = 0; done < par; done += per_job) {
+    jobs.push_back(new VectorUnit::VecUnitJob(lin, std::min(per_job, par - done), is_prebuffered, phases));
+  }
   return jobs;
 }
 
@@ -64,18 +81,17 @@ JobPair Matmul(const ArchConfig &a_config, const LayerConfig &l_config) {
     JobList jl;
     
     // WS: Split N first, then check buffer constraints per core
-    int core_n = N / a_config.n_cores;
-    std::cout << "WS N-splitting: " << N << " output channels across " << a_config.n_cores << " cores" << std::endl;
-    
-    static std::vector<int> core_task_counters(a_config.n_cores, 0);
-    for (int core = 0; core < a_config.n_cores; ++core) {
+    auto core_ns = split_even(N, a_config.n_cores);
+    std::cout << "WS N-splitting: " << N << " output channels across " << core_ns.size() << " cores" << std::endl;
+
+    for (int core = 0; core < (int) core_ns.size(); ++core) {
+      int core_n = core_ns[core];
       int required_buff_sz_per_core = (M * core_n + M * std::min(K, a_config.sa_sz_allo)) * batch_size * data_type_width;
       bool core_is_bufferable = required_buff_sz_per_core <= buffer_size_bytes;
       
       if (core_is_bufferable) {
         auto job = new SystolicArray::SysArrayJob(M, K, core_n);
         job->core_id = core;
-        job->task_idx = core_task_counters[core]++;
         jl.push_back(job);
         std::cout << "  Core " << core << ": " << core_n << " out dim - bufferable" << std::endl;
       } else {
@@ -90,7 +106,6 @@ JobPair Matmul(const ArchConfig &a_config, const LayerConfig &l_config) {
           int current_N = std::min(N_per_job, remaining_N);
           auto job = new SystolicArray::SysArrayJob(M, K, current_N);
           job->core_id = core;
-          job->task_idx = core_task_counters[core]++;
           jl.push_back(job);
         }
       }
@@ -111,6 +126,10 @@ JobPair Conv(const ArchConfig &a_config, const LayerConfig &l_config) {
   int M, K, N;
   
   // Conv layer parameters: batch, input_channels, input_height, input_width, output_channels, kernel_size, stride, padding
+  // A 3-dim Conv is already in im2col GEMM form (M K N), as in the TPU validation workloads.
+  if (l_config.dimensions.size() == 3) {
+    return Matmul(a_config, l_config);
+  }
   if (l_config.dimensions.size() < 5) {
     std::cerr << "Conv expecting at least 5 dimensions: batch, input_channels, input_height, input_width, output_channels" << std::endl;
     throw std::exception();
@@ -148,12 +167,12 @@ JobPair Conv(const ArchConfig &a_config, const LayerConfig &l_config) {
   if (a_config.ws) {
     JobList jl;
     
-  // First split N by number of cores (assume remainder is 0)
-    int core_n = N / a_config.n_cores;
-    std::cout << "Conv WS N-splitting: " << N << " output channels across " << a_config.n_cores << " cores" << std::endl;
-    
-    static std::vector<int> core_task_counters(a_config.n_cores, 0);  // Per-core task counters
-    for (int core = 0; core < a_config.n_cores; ++core) {
+    // First split N by number of cores
+    auto core_ns = split_even(N, a_config.n_cores);
+    std::cout << "Conv WS N-splitting: " << N << " output channels across " << core_ns.size() << " cores" << std::endl;
+
+    for (int core = 0; core < (int) core_ns.size(); ++core) {
+      int core_n = core_ns[core];
       // Check if this core's portion fits in buffer
       int required_buff_sz_per_core = (M * core_n + M * std::min(K, a_config.sa_sz_allo)) * batch_size * data_type_width;
       bool core_is_bufferable = required_buff_sz_per_core <= buffer_size_bytes;
@@ -161,7 +180,6 @@ JobPair Conv(const ArchConfig &a_config, const LayerConfig &l_config) {
       if (core_is_bufferable) {
         auto job = new SystolicArray::SysArrayJob(M, K, core_n);
         job->core_id = core;  // Assign core ID for parallel scheduling
-        job->task_idx = core_task_counters[core]++;  // Sequential task ID per core (0,1,2,3...)
         jl.push_back(job);
         std::cout << "  Core " << core << ": " << core_n << " out dim - bufferable (core_id=" << core << ")" << std::endl;
       } else {
@@ -176,7 +194,6 @@ JobPair Conv(const ArchConfig &a_config, const LayerConfig &l_config) {
           int current_N = std::min(N_per_job, remaining_N);
           auto job = new SystolicArray::SysArrayJob(M, K, current_N);
           job->core_id = core;
-          job->task_idx = core_task_counters[core]++;
           jl.push_back(job);
         }
       }
@@ -214,8 +231,8 @@ JobPair MatmulAct(const ArchConfig &a_config, const LayerConfig &l_config) {
 
     JobList matmul_layers = createSAJobs(M,
                                          a_config.sa_sz_allo,
-                                         N, num_jobs);
-    JobList act_layer = {new VectorUnit::VecUnitJob(1, M * K, true, {{VectorUnit::VPUPhase::BROADCAST, 1}})};
+                                         N, num_jobs, a_config.n_cores);
+    JobList act_layer = createVUJobs(1, M * N, true, {{VectorUnit::VPUPhase::BROADCAST, 1}}, a_config.n_cores);
 
     connectJobLists(matmul_layers, act_layer);
 
@@ -224,8 +241,8 @@ JobPair MatmulAct(const ArchConfig &a_config, const LayerConfig &l_config) {
     int num_jobs = std::max(1, M / a_config.sa_sz_allo);
     JobList matmul_layers = createSAJobs(a_config.sa_sz_allo,
                                          K,
-                                         N, num_jobs);
-    JobList act_layer = {new VectorUnit::VecUnitJob(1, M * K, true, {{VectorUnit::VPUPhase::BROADCAST, 1}})};
+                                         N, num_jobs, a_config.n_cores);
+    JobList act_layer = createVUJobs(1, M * N, true, {{VectorUnit::VPUPhase::BROADCAST, 1}}, a_config.n_cores);
 
     connectJobLists(matmul_layers, act_layer);
 
@@ -250,13 +267,13 @@ JobPair ActMatmul(const ArchConfig &a_config, const LayerConfig &l_config) {
   }
 
   // Create activation layer job
-  JobList act_layer = {new VectorUnit::VecUnitJob(1, M * K, true, {{VectorUnit::VPUPhase::BROADCAST, 1}})};
+  JobList act_layer = createVUJobs(1, M * K, true, {{VectorUnit::VPUPhase::BROADCAST, 1}}, a_config.n_cores);
 
   if (a_config.ws) {
     int num_jobs = std::max(1, K / a_config.sa_sz_allo);
     JobList matmul_layers = createSAJobs(M,
                                          a_config.sa_sz_allo,
-                                         N, num_jobs);
+                                         N, num_jobs, a_config.n_cores);
     connectJobLists(act_layer, matmul_layers);
 
     return {act_layer, matmul_layers};
@@ -264,7 +281,7 @@ JobPair ActMatmul(const ArchConfig &a_config, const LayerConfig &l_config) {
     int num_jobs = std::max(1, M / a_config.sa_sz_allo);
     JobList matmul_layers = createSAJobs(a_config.sa_sz_allo,
                                          K,
-                                         N, num_jobs);
+                                         N, num_jobs, a_config.n_cores);
     connectJobLists(act_layer, matmul_layers);
 
     return {act_layer, matmul_layers};
@@ -295,23 +312,19 @@ JobPair LayerNorm(const ArchConfig &a_config, const LayerConfig &l_config) {
       throw std::exception();
   }
   // Create jobs with buffer size constraints
-  JobList jl;
-  int par_acc = par_dim;
-  int dec_amt = buffer_size_bytes / data_type_width / lin_dim;
-  while (par_acc > 0) {
-    jl.push_back(new VectorUnit::VecUnitJob(lin_dim, std::min(dec_amt, par_acc), false,
-                                            {{VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::REDUCE, 4}, {VectorUnit::VPUPhase::BROADCAST, 1}}));
-    par_acc -= dec_amt;
-  }
-  return {{jl}, {jl}};
+  int dec_amt = std::max(1, buffer_size_bytes / data_type_width / lin_dim);
+  JobList jl = createVUJobs(lin_dim, par_dim, false,
+                            {{VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::REDUCE, 4}, {VectorUnit::VPUPhase::BROADCAST, 1}},
+                            a_config.n_cores, dec_amt);
+  return {jl, jl};
 }
 
 JobPair Activation(const ArchConfig &a_config, const LayerConfig &l_config) {
   int sz = 1;
   for (const auto &dim: l_config.dimensions) sz *= dim;
 
-  auto job = new VectorUnit::VecUnitJob(1, sz, false, {{VectorUnit::VPUPhase::BROADCAST, 1}});
-  return {{job}, {job}};
+  JobList jl = createVUJobs(1, sz, false, {{VectorUnit::VPUPhase::BROADCAST, 1}}, a_config.n_cores);
+  return {jl, jl};
 }
 
 JobPair Softmax(const ArchConfig &a_config, const LayerConfig &l_config) {
@@ -327,23 +340,15 @@ JobPair Softmax(const ArchConfig &a_config, const LayerConfig &l_config) {
     throw std::exception();
   }
 
-  int spl = 1;
-  int Mp = M * heads;
-  if (heads * M * M * data_type_width * batch_size > buffer_size_bytes || Mp > 1024) {
-    spl = std::max(div_ru(heads * M * M * data_type_width * batch_size, buffer_size_bytes), div_ru(Mp, 1024));
-    if (spl > Mp) {
-      std::cerr << "Can't split this enough to fit inside buffer." << std::endl;
-      throw std::exception();
-    }
-    Mp /= spl;
-  }
-  std::cout << "Splitting by " << spl << std::endl;
-
-  int n_jobs = div_ru(div_ru(M * heads, Mp), n_vpus);
-  JobList softmax_layer;
-  for (int i = 0; i < n_jobs; ++i)
-    softmax_layer.push_back(new VectorUnit::VecUnitJob(M, Mp, false, softmax_phases));
-
+  // All rows are simulated. (This used to keep only 1/n_vpus of the jobs, a leftover of the old
+  // quarter-chip shortcut where one MXU and one VPU each simulated a quarter of the work; the
+  // matmul lowering no longer takes that shortcut.) Rows per job: the job's scores must fit in
+  // the buffer and at most 1024 rows; the jobs are spread over the VUs.
+  int rows = M * heads;
+  int64_t row_bytes = int64_t(M) * data_type_width * batch_size;
+  int max_rows = int(std::max<int64_t>(1, std::min<int64_t>(1024, buffer_size_bytes / row_bytes)));
+  JobList softmax_layer = createVUJobs(M, rows, false, softmax_phases, a_config.n_cores, max_rows);
+  std::cout << "Softmax: " << rows << " rows in " << softmax_layer.size() << " jobs" << std::endl;
   return {softmax_layer, softmax_layer};
 }
 
@@ -375,7 +380,7 @@ JobPair SelfAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
     auto Dot1 = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, N / n_heads, M}));
     auto Dot2 = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, M, N / n_heads}));
     auto O_proj = Matmul(a_config, LayerConfig("Matmul", {n_heads, M, N / n_heads, K}));
-    auto softmax_layer = Softmax(a_config, LayerConfig("Softmax", {8, M}));
+    auto softmax_layer = Softmax(a_config, LayerConfig("Softmax", {n_heads, M}));
 
     // Chain operations: K->Q->V->QK^T->softmax->attention*V->output
     connectJobs(K_proj, Q_proj);
@@ -389,22 +394,22 @@ JobPair SelfAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
     int num_jobs = std::max(1, M / a_config.sa_sz_allo);
     JobList K_proj = createSAJobs(a_config.sa_sz_allo,
                                   K,
-                                  N, num_jobs);
+                                  N, num_jobs, a_config.n_cores);
     JobList Q_proj = createSAJobs(a_config.sa_sz_allo,
                                   K,
-                                  N, num_jobs);
+                                  N, num_jobs, a_config.n_cores);
     JobList V_proj = createSAJobs(a_config.sa_sz_allo,
                                   K,
-                                  N, num_jobs);
+                                  N, num_jobs, a_config.n_cores);
     JobList Dot1 = createSAJobs(a_config.sa_sz_allo,
                                 K,// / m_config.n_heads,
-                                M, num_jobs);
+                                M, num_jobs, a_config.n_cores);
     JobList Dot2 = createSAJobs(a_config.sa_sz_allo,
                                 M,
-                                N, num_jobs);/// m_config.n_heads
+                                N, num_jobs, a_config.n_cores);/// m_config.n_heads
     JobList O_proj = createSAJobs(a_config.sa_sz_allo,
                                   K,
-                                  N, num_jobs);
+                                  N, num_jobs, a_config.n_cores);
 
     JobList softmax_layer = {new VectorUnit::VecUnitJob(M, M, true,
                                                         {{VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::REDUCE, 1}, {VectorUnit::VPUPhase::BROADCAST, 1}})};
