@@ -35,6 +35,9 @@ extern std::string dram_config_path;
 // (as memory controllers do), so concurrent streams whose bases differ by a multiple of the row
 // stripe do not all hit the same bank with different rows. Off by default.
 extern bool dram_addr_hash;
+// GEMM precision as MACs per PE per cycle relative to bf16 (1 bf16, 2 fp8, 4 fp4): SA operand rows stream
+// gemm_kdiv times faster and operand bytes shrink by gemm_kdiv. The bf16 result and all vector work are unchanged.
+extern int gemm_kdiv;
 
 const int buffer_size_bytes = 8 * 1024 * 1024;
 

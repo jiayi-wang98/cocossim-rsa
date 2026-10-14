@@ -67,6 +67,7 @@ private:
     int parallel_dimension;
     std::queue<std::pair<VPUPhase, int>> phases;
     bool is_prebuffered;
+    bool out_on_chip = false;  // result stays in the buffer: no DRAM write
     int op_latency = 1;
 
     [[nodiscard]] std::string get_job_dims_string() const override;

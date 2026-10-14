@@ -34,7 +34,7 @@ bool VecUnitState::increment(const std::function<void(Job *)> &enqueue_job, int 
           // All phases completed, write results
           state_transfer(VectorUnit::VPUState::write,
                          0,
-                         lin * par * data_type_width * batch_size,
+                         sj->out_on_chip ? 0 : lin * par * data_type_width * batch_size,
                          0);
         } else if (ph_ar.front().first == VPUPhase::REDUCE) {
           // Reduction phase: compute along linear dimension

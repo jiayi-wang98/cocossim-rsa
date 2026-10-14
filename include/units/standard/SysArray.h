@@ -19,6 +19,8 @@ namespace SystolicArray {
       return SYSTOLIC_ARRAY_IDX;
     }
     int M, K, N;
+    bool act_on_chip = false;  // streamed operand (M x K) is already in the buffer: no DRAM reads for it
+    bool out_on_chip = false;  // result (M x N) stays in the buffer: no DRAM write
 
     SysArrayJob(int m, int k, int n);
 

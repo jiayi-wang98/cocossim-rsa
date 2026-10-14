@@ -479,6 +479,97 @@ JobPair SelfAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
   }
 }
 
+// FlashAttention-style fused attention core (projections are separate layers):
+//   FlashAttention B H N D [block_q=1024] [block_kv=auto] [window=2] [causal=0]
+// Each (batch, head, q-block) item is pinned to one core and walks the KV sequence in chunks:
+//   S = Q K^T (SA) -> online softmax on S (VU: max, exp, sum) -> rescale O (VU, chunks after the first)
+//   -> O += P V (SA), and finally O / l (VU), which writes O to DRAM.
+// Scores, P and the running O never leave the buffer; Q is read once per item, K and V once per item.
+// At most `window` score chunks per item and `window` items per core are in flight, so one item's softmax
+// overlaps another item's GEMMs on the same core (FlashAttention-3 style ping-pong).
+// block_kv=auto sizes a score chunk to buffer / (window * cores).
+JobPair FlashAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
+  const auto &d = l_config.dimensions;
+  if (d.size() < 4) {
+    std::cerr << "FlashAttention expects B H N D [block_q] [block_kv] [window] [causal]" << std::endl;
+    throw std::exception();
+  }
+  int B = d[0], H = d[1], N = d[2], D = d[3];
+  int ncore = std::max(1, a_config.n_cores);
+  int Bq = (d.size() > 4 && d[4] > 0) ? std::min(d[4], N) : std::min(1024, N);
+  int W = (d.size() > 6 && d[6] > 0) ? d[6] : 2;
+  bool causal = d.size() > 7 && d[7] != 0;
+  int Bkv;
+  if (d.size() > 5 && d[5] > 0) {
+    Bkv = std::min(d[5], N);
+  } else {
+    int64_t budget = buffer_size_bytes / (int64_t(W) * ncore);
+    Bkv = int(std::max<int64_t>(128, budget / (int64_t(Bq) * data_type_width * batch_size) / 128 * 128));
+    Bkv = std::min(Bkv, N);
+  }
+  const std::vector<std::pair<VectorUnit::VPUPhase, int>> one_pass = {{VectorUnit::VPUPhase::BROADCAST, 1}};
+  JobList heads, tails;
+  std::vector<Job *> item_done;
+  int qblocks = div_ru(N, Bq), item = 0;
+  for (int b = 0; b < B; ++b) {
+    for (int h = 0; h < H; ++h) {
+      for (int qb = 0; qb < qblocks; ++qb, ++item) {
+        int core = item % ncore;
+        int r0 = qb * Bq, q = std::min(Bq, N - r0);
+        int kv_end = causal ? std::min(N, r0 + q) : N;
+        Job *first = nullptr, *prev_qk = nullptr, *prev_sm = nullptr, *prev_pv = nullptr;
+        std::vector<Job *> pvs;
+        for (int c0 = 0, j = 0; c0 < kv_end; c0 += Bkv, ++j) {
+          int kv = std::min(Bkv, kv_end - c0);
+          auto *qk = new SystolicArray::SysArrayJob(q, D, kv);  // Q rows stream, K^T chunk is stationary
+          qk->act_on_chip = j > 0;
+          qk->out_on_chip = true;
+          qk->core_id = core;
+          auto *sm = new VectorUnit::VecUnitJob(kv, q, true, softmax_phases);
+          sm->out_on_chip = true;
+          sm->core_id = ncore + core;  // the VU of the same core
+          qk->add_child(sm);
+          if (prev_sm) prev_sm->add_child(sm);  // running max and sum
+          Job *before_pv = sm;
+          if (j > 0) {  // O *= exp(m_old - m_new)
+            auto *rs = new VectorUnit::VecUnitJob(D, q, true, one_pass);
+            rs->out_on_chip = true;
+            rs->core_id = ncore + core;
+            sm->add_child(rs);
+            before_pv = rs;
+          }
+          auto *pv = new SystolicArray::SysArrayJob(q, kv, D);  // P rows stream from the buffer, V chunk is stationary
+          pv->act_on_chip = true;
+          pv->out_on_chip = true;
+          pv->core_id = core;
+          before_pv->add_child(pv);
+          if (prev_pv) prev_pv->add_child(pv);
+          if (prev_qk) prev_qk->add_child(qk);
+          if (j >= W) pvs[j - W]->add_child(qk);  // at most W score chunks of this item in the buffer
+          if (!first) first = qk;
+          prev_qk = qk;
+          prev_sm = sm;
+          prev_pv = pv;
+          pvs.push_back(pv);
+        }
+        auto *norm = new VectorUnit::VecUnitJob(D, q, true, one_pass);  // O / l, written to DRAM
+        norm->core_id = ncore + core;
+        prev_pv->add_child(norm);
+        tails.push_back(norm);
+        if (item >= W * ncore) {
+          item_done[item - W * ncore]->add_child(first);  // at most W items in flight per core
+        } else {
+          heads.push_back(first);
+        }
+        item_done.push_back(norm);
+      }
+    }
+  }
+  std::cout << "FlashAttention: " << item << " items (batch x head x q-block), block_q " << Bq << ", block_kv " << Bkv
+            << ", window " << W << (causal ? ", causal" : "") << std::endl;
+  return {heads, tails};
+}
+
 JobPair MultiHeadSelfAttention(const ArchConfig &a_config, const LayerConfig &l_config) {
   JobList all_heads, all_tails;
 
@@ -511,6 +602,8 @@ JobCreate_f getLayerLambda(const std::string &layer_type) {
     return SelfAttention;
   if (layer_type == "MultiHeadSelfAttention")
     return MultiHeadSelfAttention;
+  if (layer_type == "FlashAttention")
+    return FlashAttention;
   throw std::runtime_error("Unknown layer type: " + layer_type);
 }
 

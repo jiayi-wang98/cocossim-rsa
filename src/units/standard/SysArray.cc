@@ -16,6 +16,10 @@
 
 using namespace frontend::standard;
 
+// GEMM precision (gemm_kdiv = MACs per PE per cycle vs bf16): operand rows stream gemm_kdiv times faster and
+// operand bytes shrink by gemm_kdiv; the M x N bf16 result and the array fill/drain cycles are unchanged.
+static inline int fast(int x) { return div_ru(x, gemm_kdiv); }
+
 bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &enqueue_job, int &total_idle, int *n_idle_units) {
   auto *sj = (SysArrayJob *) j;
   enqueue_reads();
@@ -27,11 +31,11 @@ bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &e
           state_transfer(read,
                          0,
                          0,
-                         sj->M * std::max(systolic_fpu_latency, batch_size));
+                         fast(sj->M * std::max(systolic_fpu_latency, batch_size)));
           break;
         case read:  // Read input activations
           state_transfer(shift,
-                         std::min(sz, sj->K) * std::min(sz, sj->N) * data_type_width,
+                         fast(std::min(sz, sj->K) * std::min(sz, sj->N) * data_type_width),
                          0,
                          sz * std::max(systolic_fpu_latency, batch_size));
           break;
@@ -45,9 +49,9 @@ bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &e
           // Check if we're at the end of tile computation
           if (col_i == loop_cols_tiles) {
             if (row_i == loop_row_tiles) {
-              amt_to_write = sj->M * sj->N * data_type_width * batch_size;
+              amt_to_write = sj->out_on_chip ? 0 : sj->M * sj->N * data_type_width * batch_size;
             } else {
-              activation_preload = std::min(sz, sj->K) * sj->M * batch_size * data_type_width;
+              activation_preload = sj->act_on_chip ? 0 : fast(std::min(sz, sj->K) * sj->M * batch_size * data_type_width);
             }
           }
           amt_to_read = activation_preload;
@@ -55,7 +59,7 @@ bool SystolicArray::SysArrayState::increment(const std::function<void(Job *)> &e
           state_transfer(write, amt_to_read, amt_to_write, n_cycles);
         } break;
         case write: {  // Write output data to memory
-          int rd_cycles = sj->M * std::max(systolic_fpu_latency, batch_size);
+          int rd_cycles = fast(sj->M * std::max(systolic_fpu_latency, batch_size));
           if (col_i == loop_cols_tiles) {
             if (row_i == loop_row_tiles) {
               // Job completed
@@ -130,13 +134,13 @@ void SystolicArray::SysArrayState::init_row_loop(bool new_row) {
   if (ws) {
     throw std::exception();
   } else {
-    min_stage_cycles = sj->K * systolic_fpu_latency;
+    min_stage_cycles = fast(sj->K * systolic_fpu_latency);
     if (new_row) {
       n_read_bytes = std::min(sz, sj->M) * sj->K * (batch_size + (j->batched_weights ? batch_size : 1)) * data_type_width;
     } else {
       n_read_bytes = std::min(sz, sj->M) * sj->K * (j->batched_weights ? batch_size : 1) * data_type_width;
     }
-    n_read_beats = std::max(n_read_bytes / bytes_per_tx, 1);
+    n_read_beats = std::max(fast(n_read_bytes) / bytes_per_tx, 1);
   }
   mem_read_left = mem_read_left_unqueued = n_read_beats;
 }
@@ -150,16 +154,16 @@ void SystolicArray::SysArrayState::init() {
     UPDATE_STATE(SystolicArray::prefetch);
     loop_cols_tiles = div_ru(sj->N, sz);
     loop_row_tiles = div_ru(sj->K, sz);
-    int sys_array_preload = std::min(sz, sj->N) * std::min(sz, sj->K) * data_type_width;
-    int activation_preload = std::min(sz, sj->K) * sj->M * data_type_width;
+    int sys_array_preload = fast(std::min(sz, sj->N) * std::min(sz, sj->K) * data_type_width);
+    int activation_preload = sj->act_on_chip ? 0 : fast(std::min(sz, sj->K) * sj->M * data_type_width);
     state_transfer(SystolicArray::prefetch, activation_preload + sys_array_preload, 0, sz);
     row_i = 1;
     col_i = 1;
   } else {
     UPDATE_STATE(SystolicArray::read);
-    min_stage_cycles = sj->K * std::max(systolic_fpu_latency, batch_size);
+    min_stage_cycles = fast(sj->K * std::max(systolic_fpu_latency, batch_size));
     int n_read_bytes = std::min(sz, sj->M) * sj->K * (batch_size + (j->batched_weights ? batch_size : 1)) * data_type_width;
-    int n_read_beats = n_read_bytes / bytes_per_tx;
+    int n_read_beats = fast(n_read_bytes) / bytes_per_tx;
     mem_read_left = mem_read_left_unqueued = n_read_beats;
 
     loop_cols_tiles = std::max(sj->N / sz, 1);

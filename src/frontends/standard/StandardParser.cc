@@ -21,12 +21,14 @@ Arch* StandardParser::make_arch() {
               {"-sa_sz", &sa_sz},
               {"-vu_sz", &vu_sz},
               {"-ws", &ws},
-              {"-gemm_sched", &gemm_sched}},
+              {"-gemm_sched", &gemm_sched},
+              {"-gemm_kdiv", &gemm_kdiv}},
              "-c       number of cores\n"
              "-sa_sz   size of the systolic array\n"
              "-sz_vu   size of the vector unit\n"
              "-ws      weight stationary (1) or output stationary (0)\n"
-             "-gemm_sched  0: split GEMMs evenly over cores (default); 1: TPUv3-fitted partitioning (WS only)");
+             "-gemm_sched  0: split GEMMs evenly over cores (default); 1: TPUv3-fitted partitioning (WS only)\n"
+             "-gemm_kdiv   GEMM MACs per PE per cycle vs bf16: 1 (bf16, default), 2 (fp8), 4 (fp4)");
   arch_config = ArchConfig(cores, sa_sz, vu_sz, ws, gemm_sched);
   return new StandardArch;
 }
