@@ -28,11 +28,14 @@ struct ArchParser {
         ofile = argv[++i];
       } else if (strcmp(argv[i], "-f") == 0) {
         freq_sa = std::stof(argv[++i]);
+      } else if (strcmp(argv[i], "-dram_cfg") == 0) {
+        ++i;  // read in main() before the memory system is set up
       } else if (strcmp(argv[i], "-h") == 0) {
         std::cerr << "Global Options:\n"
                      "-i <file>     layer input file\n"
                      "-o <file>     output statistic file\n"
-                     "-f <float>    frequency (GHz)\n";
+                     "-f <float>    frequency (GHz)\n"
+                     "-dram_cfg <file>  DRAMSim3 .ini (default ../dramsim3/configs/HBM2_8Gb_x128.ini)\n";
         if (help_str != "") {
           std::cerr << "Arch Specific Options:\n"
                     << help_str << std::endl;

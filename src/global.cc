@@ -22,6 +22,8 @@ float freq_sa = 1;
 float freq_vu = 1;
 
 bool do_par = false;
+int dram_enq_per_cycle = 9;
+std::string dram_config_path = "../dramsim3/configs/HBM2_8Gb_x128.ini";
 char const *rand_chars[] = {"a", "b", "c", "d", "e", "f",
                             "g", "h", "i", "j", "k", "l",
                             "m", "n", "o", "p", "q", "r",

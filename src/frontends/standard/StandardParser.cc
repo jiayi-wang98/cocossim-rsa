@@ -12,10 +12,10 @@
 using namespace frontend::standard;
 
 Arch* StandardParser::make_arch() {
-  int cores;
-  int sa_sz;
-  int vu_sz;
-  int ws;
+  int cores = 1;
+  int sa_sz = 128;
+  int vu_sz = 128;
+  int ws = 0;
   parse_args({{"-c", &cores},
               {"-sa_sz", &sa_sz},
               {"-vu_sz", &vu_sz},

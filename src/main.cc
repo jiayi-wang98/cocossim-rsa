@@ -13,6 +13,7 @@
 
 #include "memory.h"
 #include <chrono>
+#include <cstring>
 
 std::string layer_file;
 std::string ofile;
@@ -27,6 +28,10 @@ int main(int argc, char **argv) {
   MyLayerParser layerParser;
 
   auto t1 = std::chrono::high_resolution_clock::now();
+  // The memory system has to exist before the arch is built (units size their write-backs from it).
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (strcmp(argv[i], "-dram_cfg") == 0) dram_config_path = argv[i + 1];
+  }
   mem::setup();
 
 #ifdef VCD

@@ -9,6 +9,7 @@
 
 #include "memory.h"
 #include "global.h"
+#include <algorithm>
 
 using namespace mem;
 
@@ -57,7 +58,7 @@ bool mem::try_enqueue_tx() {
 }
 
 void mem::setup() {
-  dramsim3config = new dramsim3::Config("../dramsim3/configs/HBM2_8Gb_x128.ini", "./");
+  dramsim3config = new dramsim3::Config(dram_config_path, "./");
   mem_sys = new mem_ty(*dramsim3config, "./", [](uint64_t addr) {
         auto it = address_reads_bkwds_lookup.find(addr);
         if (it != address_reads_bkwds_lookup.end()) {
@@ -76,6 +77,8 @@ void mem::setup() {
             std::cerr << "Error: Address " << addr << " not found in address_writes_bkwds_lookup" << std::endl;
         } });
   bytes_per_tx = dramsim3config->request_size_bytes;
-  std::cout << "REQUEST SIZE BYTES " << bytes_per_tx << std::endl;
+  dram_enq_per_cycle = std::max(9, (9 * dramsim3config->channels + 7) / 8);
+  std::cout << "DRAM CONFIG " << dram_config_path << " channels " << dramsim3config->channels
+            << " REQUEST SIZE BYTES " << bytes_per_tx << " ENQ PER CYCLE " << dram_enq_per_cycle << std::endl;
 
 }
