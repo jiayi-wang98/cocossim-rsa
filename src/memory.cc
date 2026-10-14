@@ -29,11 +29,26 @@ struct PrioritySorter {
     }
 };
 
+// Bijective address hash: row bits are kept, the low row bits are XORed into channel, bank group and bank.
+static uint64_t hash_addr(uint64_t addr) {
+  if (!dram_addr_hash) return addr;
+  const auto &c = *mem::dramsim3config;
+  uint64_t low = addr & ((uint64_t(1) << c.shift_bits) - 1);
+  uint64_t x = addr >> c.shift_bits;
+  uint64_t r = (x >> c.ro_pos) & c.ro_mask;
+  x ^= (r & c.ch_mask) << c.ch_pos;
+  r >>= __builtin_popcountll(c.ch_mask);
+  x ^= (r & c.bg_mask) << c.bg_pos;
+  r >>= __builtin_popcountll(c.bg_mask);
+  x ^= (r & c.ba_mask) << c.ba_pos;
+  return (x << c.shift_bits) | low;
+}
+
 bool mem::try_enqueue_tx() {
     // Try to enqueue memory transactions with priority handling
     for (int i = 0; i < to_enqueue.size() && i < 64; ++i) {
         auto &pair = to_enqueue[i];
-        uint64_t addr = std::get<0>(pair);
+        uint64_t addr = hash_addr(std::get<0>(pair));
         bool is_write = std::get<1>(pair);
         int priority = std::get<2>(pair);
         State *state = std::get<3>(pair);
@@ -79,6 +94,7 @@ void mem::setup() {
   bytes_per_tx = dramsim3config->request_size_bytes;
   dram_enq_per_cycle = std::max(9, (9 * dramsim3config->channels + 7) / 8);
   std::cout << "DRAM CONFIG " << dram_config_path << " channels " << dramsim3config->channels
-            << " REQUEST SIZE BYTES " << bytes_per_tx << " ENQ PER CYCLE " << dram_enq_per_cycle << std::endl;
+            << " REQUEST SIZE BYTES " << bytes_per_tx << " ENQ PER CYCLE " << dram_enq_per_cycle
+            << " ADDR HASH " << dram_addr_hash << std::endl;
 
 }

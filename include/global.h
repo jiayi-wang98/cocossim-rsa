@@ -31,6 +31,10 @@ const int seq_len = 2048;
 // HBM2 config, scaled with the channel count in mem::setup() so larger memories are not throttled.
 extern int dram_enq_per_cycle;
 extern std::string dram_config_path;
+// XOR the low row bits into the channel/bank-group/bank bits before addresses reach DRAMSim3
+// (as memory controllers do), so concurrent streams whose bases differ by a multiple of the row
+// stripe do not all hit the same bank with different rows. Off by default.
+extern bool dram_addr_hash;
 
 const int buffer_size_bytes = 8 * 1024 * 1024;
 
